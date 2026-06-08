@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Arrêtés temporaires - Saint-Laurent-en-Grandvaux</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+  <style>
+    :root {
+      --blue: #2563eb;
+      --red: #dc2626;
+      --orange: #f97316;
+      --green: #16a34a;
+      --purple: #7c3aed;
+      --gray: #4b5563;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f6f6f6;
+      color: #222;
+    }
+
+    header {
+      background: #fff;
+      padding: 18px 24px;
+      border-bottom: 1px solid #ddd;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+
+    header p {
+      margin: 6px 0 0;
+      color: #555;
+      font-size: 14px;
+    }
+
+    #controls {
+      padding: 12px 24px;
+      background: #fff;
+      border-bottom: 1px solid #ddd;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid #ccc;
+      background: #fff;
+      padding: 8px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button.active {
+      font-weight: bold;
+      border-color: #111;
+      background: #f0f0f0;
+    }
+
+    #map {
+      height: calc(100vh - 145px);
+      min-height: 620px;
+      width: 100%;
+    }
+
+    .popup-title {
+      font-weight: bold;
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .popup-line {
+      margin-bottom: 5px;
+    }
+
+    .tag {
+      display: inline-block;
+      color: white;
+      padding: 4px 7px;
+      border-radius: 5px;
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+
+    .pdf-link {
+      display: inline-block;
+      margin-top: 8px;
+      font-weight: bold;
+    }
+
+    .notice {
+      position: absolute;
+      z-index: 500;
+      bottom: 12px;
+      left: 12px;
+      background: white;
+      padding: 8px 10px;
+      border-radius: 6px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.25);
+      font-size: 13px;
+    }
+  </style>
+</head>
+
+<body>
+
+<header>
+  <h1>Arrêtés temporaires</h1>
+  <p>Travaux, circulation, stationnement et manifestations à Saint-Laurent-en-Grandvaux</p>
+</header>
+
+<div id="controls">
+  <span>Afficher :</span>
+  <button data-filter="actifs" class="active">En cours / à venir</button>
+  <button data-filter="tous">Tous</button>
+  <button data-filter="Travaux">Travaux</button>
+  <button data-filter="Circulation">Circulation</button>
+  <button data-filter="Stationnement">Stationnement</button>
+  <button data-filter="Manifestation">Manifestations</button>
+  <button data-filter="Route barrée">Routes barrées</button>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+  const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTYCrlq1UwCiU3wft-l3tIQjuCrIZP0wezi_Gfmf13Io4Dy3Qfl5hyVfEv8_aQhQntJEkixTc7xuDXP/pub?output=tsv";
+  const COMMUNE_CENTER = [46.5752, 5.9570];
+
+  const map = L.map('map').setView(COMMUNE_CENTER, 15);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  let layerGroup = L.layerGroup().addTo(map);
+  let allData = [];
+  let activeFilter = 'actifs';
+
+  const colors = {
+    'Travaux': '#2563eb',
+    'Travaux voirie': '#2563eb',
+    'Travaux réseau': '#2563eb',
+    'Circulation': '#f97316',
+    'Stationnement': '#f97316',
+    'Manifestation': '#16a34a',
+    'Route barrée': '#dc2626'
+  };
+
+  fetch(SHEET_URL)
+    .then(response => response.text())
+    .then(text => {
+      allData = parseTable(text);
+      renderMap();
+    })
+    .catch(error => {
+      console.error('Erreur de chargement du Google Sheets', error);
+      alert("Impossible de charger les données de la carte.");
+    });
+
+  document.querySelectorAll('button[data-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      activeFilter = button.dataset.filter;
+      document.querySelectorAll('button[data-filter]').forEach(b => b.classList.remove('active'));
+      button.classList.add('active');
+      renderMap();
+    });
+  });
+
+  function parseTable(text) {
+    const delimiter = text.includes('\t') ? '\t' : ';';
+    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+    const headers = lines.shift().split(delimiter).map(h => cleanHeader(h));
+
+    return lines.map(line => {
+      const values = splitLine(line, delimiter);
+      let obj = {};
+      headers.forEach((header, i) => obj[header] = (values[i] || '').trim());
+      return obj;
+    });
+  }
+
+  function splitLine(line, delimiter) {
+    // Suffisant pour Google Sheets publié simple.
+    return line.split(delimiter);
+  }
+
+  function cleanHeader(header) {
+    return header.trim()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, '')
+      .toLowerCase();
+  }
+
+  function renderMap() {
+    layerGroup.clearLayers();
+
+    const bounds = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const filtered = allData.filter(a => {
+      const categorie = get(a, 'categorie');
+      const fin = parseDate(get(a, 'fin'));
+
+      if (activeFilter === 'tous') return true;
+      if (activeFilter === 'actifs') return !fin || fin >= today;
+
+      return categorie.toLowerCase().includes(activeFilter.toLowerCase());
+    });
+
+    filtered.forEach(a => {
+      const mode = (get(a, 'mode') || 'point').toLowerCase();
+      const color = getColor(a);
+      const popup = makePopup(a, color);
+
+      if (mode === 'ligne') {
+        const trace = parseTrace(get(a, 'trace'));
+        if (trace.length > 1) {
+          const line = L.polyline(trace, {
+            color: color,
+            weight: 7,
+            opacity: 0.85
+          }).bindPopup(popup);
+          line.addTo(layerGroup);
+          trace.forEach(p => bounds.push(p));
+        }
+      } else {
+        const lat = parseFloat((get(a, 'latitude') || '').replace(',', '.'));
+        const lng = parseFloat((get(a, 'longitude') || '').replace(',', '.'));
+
+        if (!isNaN(lat) && !isNaN(lng)) {
+          const marker = L.circleMarker([lat, lng], {
+            radius: 9,
+            color: color,
+            fillColor: color,
+            fillOpacity: 0.9,
+            weight: 2
+          }).bindPopup(popup);
+
+          marker.addTo(layerGroup);
+          bounds.push([lat, lng]);
+        }
+      }
+    });
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [35, 35], maxZoom: 16 });
+    }
+  }
+
+  function get(a, key) {
+    return a[key] || '';
+  }
+
+  function getColor(a) {
+    const categorie = get(a, 'categorie');
+    return colors[categorie] || colors[Object.keys(colors).find(k => categorie.includes(k))] || '#4b5563';
+  }
+
+  function parseTrace(trace) {
+    if (!trace) return [];
+
+    return trace.split('|').map(pair => {
+      const parts = pair.split(',').map(x => parseFloat(x.trim()));
+      return parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1]) ? [parts[0], parts[1]] : null;
+    }).filter(Boolean);
+  }
+
+  function parseDate(dateStr) {
+    if (!dateStr) return null;
+
+    const clean = dateStr.trim();
+
+    if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
+      return new Date(clean);
+    }
+
+    const match = clean.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (match) {
+      return new Date(`${match[3]}-${match[2]}-${match[1]}T00:00:00`);
+    }
+
+    return new Date(clean);
+  }
+
+  function formatDate(dateStr) {
+    const d = parseDate(dateStr);
+    if (!d || isNaN(d)) return dateStr || '';
+    return d.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+  }
+
+  function makePopup(a, color) {
+    const lienPDF = get(a, 'lienpdf');
+
+    return `
+      <div class="tag" style="background:${color}">${get(a, 'categorie')}</div>
+      <div class="popup-title">${get(a, 'titre')}</div>
+      <div class="popup-line"><strong>Arrêté :</strong> ${get(a, 'id')}</div>
+      <div class="popup-line"><strong>Bénéficiaire :</strong> ${get(a, 'beneficiaire')}</div>
+      <div class="popup-line"><strong>Lieu :</strong> ${get(a, 'adresse')}</div>
+      <div class="popup-line"><strong>Période :</strong> du ${formatDate(get(a, 'debut'))} au ${formatDate(get(a, 'fin'))}</div>
+      <div>${get(a, 'description')}</div>
+      ${lienPDF ? `<a class="pdf-link" href="${lienPDF}" target="_blank" rel="noopener">Consulter l'arrêté</a>` : ''}
+    `;
+  }
+</script>
+
+</body>
+</html>
